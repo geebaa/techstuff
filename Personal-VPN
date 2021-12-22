@@ -342,7 +342,7 @@ the OpenVPN Cloud web portal where an setup token is provided.  This
 token is used by this utility to download the proper VPN configuration
 profile and complete the configuration.
 
-Enter setup token: Y9mQxW/Wn31QCltt8cPKdghpvzBR/IWsnoCj+g/H8Ks=603217613b9292835                                                                              0d388b42dbb04f2d3fff163
+Enter setup token:
 
 Downloading OpenVPN Cloud Connector profile ... Done
 Saving profile to "/etc/openvpn3/autoload/connector.conf" ... Done
