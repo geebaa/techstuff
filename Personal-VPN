@@ -1,0 +1,1076 @@
+highlevel doc to standup a personal VPN using free openvpn cloud and oracle free compute instance 
+===================================================================================================
+
+1) Create openvpn account and choose "OpenVPN Cloud" and follow the steps to create a cloud network
+2) Install the openvpn client (windows,mac,android,iphone) and configure to connect to the "OpenVPN cloud" network
+3) Now the client can send packets to the openvpn cloud but still internet access is local because of "split tunnel on" and "no egress"
+   This means all known routes can be put on the tunnel while default still goes via local . Hence interneet access is via local.
+4) Now we proceed to create an egress for this cloud network to exit to the "internet". In the openvpn cloud proceed to create a connector
+5) At some point in connector it would want to create to the exit device and this is where the oracle cloud VM will come in. 
+   templates are available for GCP, aws and azure . For oracle cloud VM , choose "Other" and then go ahead and get the commands based on the VM instance type.
+   Since I had created a ubuntu 20.4 LTS , the commands I got were as below to be executed in the shell of the VM
+   ===========
+       curl -O https://cloud-backend.openvpn.com/cvpn/api/v1/scripts/VWJ1bnR1IDIwLjA0/gateway/ubuntu_20_04.sh
+       chmod +x ubuntu_20_04.sh
+       ./ubuntu_20_04.sh
+   ===========
+6) once ghe above commands are executed in the orcale cloud VM, the connector status in openvpn cloud will be up.
+
+What this means  is that all packts from the laptop,android  devices will be punted to the openvpn cloud and this is by a route in the local table with a slightly longer prefix
+
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      192.168.1.1    192.168.1.127     50
+          0.0.0.0        128.0.0.0       100.96.1.1       100.96.1.2    257            <==== newly added route after connecting via VPN client
+          
+ 7) Now the packets will start showing up on the Oracle VM via the connector that was created in step 4 .
+ 
+ Hold on we are not done yet .... oracle VM instance now has 2 interfaces 
+               a) one as part of the instantiation that has internet access
+               b) a tunnel interface as part of "connector" creation
+ all our packets now show up with a non-routable pvt address as source ip on the tunnel interface .. almost there...
+ 
+ 8) Enable IP routing in ubintu . It is normally enabled but check with the below command
+ 
+                    ubuntu@balu-vm:~$ sudo sysctl net.ipv4.ip_forward
+                    net.ipv4.ip_forward = 1
+                    ubuntu@balu-vm:~$ cat /proc/sys/net/ipv4/ip_forward
+                    1
+                    ubuntu@balu-vm:~$
+                    
+  9) You now expect everything would work but not because of a bug ??? 
+       tcpdump is your friend here
+       
+       sudo tcpdump -i tun0 -nnevvv dst 8.8.8.8   <== shows all packets towards 8.8.8.8 
+       
+       sudo tcpdump -i ens3 -nnevvv dst 8.8.8.8   <=== No packets seen here inspite of enabling kernel forwarding
+       
+  10) Here comes IPTables for help and straightaway the FORWARDING chain has a REJECT entry (Remember the bug in step 9 ?? )
+  
+  ubuntu@balu-vm:~$ sudo iptables -L -v
+      :
+      :
+  Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3520  183K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+ 
+ 11) Easy fix is to add a ACCEPT all just before this entry (another way could be to Delete this Entry )
+       iptables -I FORWARD 1 -j ACCEPT
+  
+  12) At this point I was expecting that NAT would not be on and wanted to really see that the packet SRC gets modified from the private IP to the interface IP
+  so thst an external NAT device again can do a NAT to get the datapath up. Luckily NAT on ubuntu was configured and SRC IP was changed to setup a proper datapath.
+  Again verify this with packet capture using tcpdump
+  
+  13) Now we have setup our private VPN using openvpn cloud and oracle compute instance all at no cost.
+  
+  
+  ********************************************************************************************************************
+  **********************************  Below This is all Debug info and Logs ******************************************
+  ********************************************************************************************************************
+  
+  ======================================================================
+  Testing using trace route to 8.8.8.8 with and with out VPN
+  =======================================================================
+  
+  Without VPN
+  ===========
+  C:\Users\geeba>C:\Users\geeba>C:\Users\geeba>tracert 8.8.8.8
+
+Tracing route to dns.google [8.8.8.8]
+over a maximum of 30 hops:
+
+  1     3 ms     3 ms     5 ms  Linksys08401 [192.168.1.1]
+  2    12 ms    23 ms    21 ms  96.*.*.* ==> My home wan ip 
+  3    17 ms    26 ms    15 ms  po-102-rur01.fremontcev3.ca.sfba.comcast.net [68.85.100.241]
+  4    29 ms    17 ms    25 ms  be-237-rar01.santaclara.ca.sfba.comcast.net [68.85.154.5]
+  5    27 ms    21 ms    16 ms  be-299-ar01.santaclara.ca.sfba.comcast.net [68.86.143.93]
+  6    29 ms    23 ms    21 ms  96.112.146.18
+  7    24 ms    20 ms    23 ms  142.251.70.43
+  8    24 ms    19 ms    24 ms  108.170.237.105
+  9    33 ms    21 ms    40 ms  dns.google [8.8.8.8]
+
+Trace complete.
+
+C:\Users\geeba>
+
+
+With VPN
+========
+C:\Users\geeba>tracert 8.8.8.8
+
+Tracing route to dns.google [8.8.8.8]
+over a maximum of 30 hops:
+
+  1    24 ms    16 ms    19 ms  50.118.155.253
+  2    32 ms    30 ms    21 ms  ns2.salegrew.com [23.82.170.3]
+  3    21 ms    23 ms    24 ms  100.96.1.18
+  4    23 ms    23 ms    21 ms  140.91.234.1
+  5    86 ms    21 ms    28 ms  4.7.22.50
+  6    46 ms    25 ms    22 ms  4.7.22.49
+  7    29 ms    26 ms    26 ms  142.250.170.50
+  8    24 ms    20 ms    28 ms  108.170.242.225
+  9    28 ms    28 ms    25 ms  142.251.65.167
+ 10    74 ms    27 ms    24 ms  dns.google [8.8.8.8]
+
+Trace complete.
+
+C:\Users\geeba>
+
+========================================================================================
+
+Commands executed on the oracle cloud VM instance for debugging
+===============================================================
+
+ubuntu@balu-vm:~$ history
+    1  curl -O https://cloud-backend.openvpn.com/cvpn/api/v1/scripts/VWJ1bnR1IDIwLjA0/gateway/ubuntu_20_04.sh
+    2  chmod +x ubuntu_20_04.sh
+    3  ./ubuntu_20_04.sh
+    4  ifconfig
+    5  ip a
+    6  route -n
+    7  sudo apt install net-tools
+    8  route -n
+    9  ping 8.8.8.8
+   10  tracert 8.8.8.8
+   11  rraceroute 8.8.8.8
+   12  traceroute 8.8.8.8
+   13  route -n
+   14  grep net.ipv4.ip_forward /etc/sysctl.conf
+   15  ipa
+   16  ip a
+   17  tcpdump -i tun0
+   18  su
+   19  sudo tcpdump -i tun0
+   20  sudo tcpdump -i tun0 -dst 8.8.8.8
+   21  sudo tcpdump -i tun0 dst 8.8.8.8
+   22  ip a
+   23  sudo tcpdump -i ens3 dst 8.8.8.8
+   24  sudo tcpdump -i tun0 dst 8.8.8.8
+   25  vi /etc/sysctl.conf
+   26  sudo tcpdump -i tun0 -nnevv dst 8.8.8.8
+   27  ip a
+   28  ip route -a
+   29  ip route
+   30  ping 100.96.1.17
+   31  iptables -t prerouting -nvL
+   32  sudo iptables -t prerouting -nvL
+   33  sudo iptables -t
+   34  sudo iptables -L -v
+   35  sudo sysctl net.ipv4.ip_forward
+   36  cat /proc/sys/net/ipv4/ip_forward
+   37  iptables -I FORWARD 1 -j ACCEPT
+   38  sudo iptables -I FORWARD 1 -j ACCEPT
+   39  sudo iptables -L -v
+   40  ip a
+   41  sudo tcpdump -i ens3 dst 8.8.8.8
+   42  sudo tcpdump -i -nnevvv ens3 dst 8.8.8.8
+   43  sudo tcpdump -i ens3 -nnevvv dst 8.8.8.8
+   44  sudo tcpdump -i tun0 -nnevv dst 8.8.8.8
+   45  history
+ubuntu@balu-vm:~$
+
+
+=====================================================================================================
+Oracle cloud instance Console prints 
+======================================================================================================
+
+login as: ubuntu
+Authenticating with public key "imported-openssh-key"
+Welcome to Ubuntu 20.04.3 LTS (GNU/Linux 5.11.0-1022-oracle x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Wed Dec 22 03:41:58 UTC 2021
+
+  System load:  0.0               Processes:             114
+  Usage of /:   3.7% of 44.97GB   Users logged in:       0
+  Memory usage: 20%               IPv4 address for ens3: 10.0.0.229
+  Swap usage:   0%
+
+1 update can be applied immediately.
+To see these additional updates run: apt list --upgradable
+
+
+The list of available updates is more than a week old.
+To check for new updates run: sudo apt update
+
+
+The programs included with the Ubuntu system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Ubuntu comes with ABSOLUTELY NO WARRANTY, to the extent permitted by
+applicable law.
+
+To run a command as administrator (user "root"), use "sudo <command>".
+See "man sudo_root" for details.
+
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ curl -O https://cloud-backend.openvpn.com/cvpn/api/v1/scripts/                                                                              VWJ1bnR1IDIwLjA0/gateway/ubuntu_20_04.sh
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100  1295  100  1295    0     0   8196      0 --:--:-- --:--:-- --:--:--  8144
+ubuntu@balu-vm:~$ chmod +x ubuntu_20_04.sh
+ubuntu@balu-vm:~$ ./ubuntu_20_04.sh
+Get:1 http://security.ubuntu.com/ubuntu focal-security InRelease [114 kB]
+Hit:2 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal InRelease
+Get:3 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates In                                                                              Release [114 kB]
+Get:4 http://security.ubuntu.com/ubuntu focal-security/main amd64 Packages [1069                                                                               kB]
+Get:5 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                               InRelease [108 kB]
+Get:6 http://security.ubuntu.com/ubuntu focal-security/main Translation-en [197                                                                               kB]
+Get:7 http://security.ubuntu.com/ubuntu focal-security/main amd64 c-n-f Metadata                                                                               [9096 B]
+Get:8 http://security.ubuntu.com/ubuntu focal-security/restricted amd64 Packages                                                                               [566 kB]
+Get:9 http://security.ubuntu.com/ubuntu focal-security/restricted Translation-en                                                                               [80.9 kB]
+Get:10 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/universe                                                                               amd64 Packages [8628 kB]
+Get:11 http://security.ubuntu.com/ubuntu focal-security/universe amd64 Packages                                                                               [668 kB]
+Get:12 http://security.ubuntu.com/ubuntu focal-security/universe Translation-en                                                                               [112 kB]
+Get:13 http://security.ubuntu.com/ubuntu focal-security/universe amd64 c-n-f Met                                                                              adata [13.0 kB]
+Get:14 http://security.ubuntu.com/ubuntu focal-security/multiverse amd64 Package                                                                              s [21.9 kB]
+Get:15 http://security.ubuntu.com/ubuntu focal-security/multiverse Translation-e                                                                              n [4948 B]
+Get:16 http://security.ubuntu.com/ubuntu focal-security/multiverse amd64 c-n-f M                                                                              etadata [540 B]
+Get:17 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/universe                                                                               Translation-en [5124 kB]
+Get:18 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/universe                                                                               amd64 c-n-f Metadata [265 kB]
+Get:19 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/multivers                                                                              e amd64 Packages [144 kB]
+Get:20 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/multivers                                                                              e Translation-en [104 kB]
+Get:21 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/multivers                                                                              e amd64 c-n-f Metadata [9136 B]
+Get:22 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ain amd64 Packages [1400 kB]
+Get:23 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ain Translation-en [283 kB]
+Get:24 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ain amd64 c-n-f Metadata [14.7 kB]
+Get:25 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/r                                                                              estricted amd64 Packages [616 kB]
+Get:26 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/r                                                                              estricted Translation-en [88.1 kB]
+Get:27 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/u                                                                              niverse amd64 Packages [884 kB]
+Get:28 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/u                                                                              niverse Translation-en [193 kB]
+Get:29 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/u                                                                              niverse amd64 c-n-f Metadata [19.9 kB]
+Get:30 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ultiverse amd64 Packages [24.8 kB]
+Get:31 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ultiverse Translation-en [6928 B]
+Get:32 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates/m                                                                              ultiverse amd64 c-n-f Metadata [616 B]
+Get:33 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /main amd64 Packages [42.0 kB]
+Get:34 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /main Translation-en [10.0 kB]
+Get:35 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /main amd64 c-n-f Metadata [864 B]
+Get:36 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /restricted amd64 c-n-f Metadata [116 B]
+Get:37 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /universe amd64 Packages [18.9 kB]
+Get:38 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /universe Translation-en [7492 B]
+Get:39 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /universe amd64 c-n-f Metadata [636 B]
+Get:40 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                              /multiverse amd64 c-n-f Metadata [116 B]
+Fetched 21.0 MB in 10s (2163 kB/s)
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+16 packages can be upgraded. Run 'apt list --upgradable' to see them.
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+curl is already the newest version (7.68.0-1ubuntu2.7).
+curl set to manually installed.
+0 upgraded, 0 newly installed, 0 to remove and 16 not upgraded.
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100  3165  100  3165    0     0  28772      0 --:--:-- --:--:-- --:--:-- 28772
+OK
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100   109  100   109    0     0   1415      0 --:--:-- --:--:-- --:--:--  1434
+Get:1 https://swupdate.openvpn.net/community/openvpn3/repos focal InRelease [684                                                                              0 B]
+Hit:2 http://security.ubuntu.com/ubuntu focal-security InRelease
+Hit:3 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal InRelease
+Get:4 https://swupdate.openvpn.net/community/openvpn3/repos focal/main amd64 Pac                                                                              kages [10.7 kB]
+Hit:5 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-updates In                                                                              Release
+Hit:6 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal-backports                                                                               InRelease
+Fetched 17.5 kB in 1s (16.0 kB/s)
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+16 packages can be upgraded. Run 'apt list --upgradable' to see them.
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+The following additional packages will be installed:
+  libjsoncpp1 libprotobuf17 libtinyxml2-6a openvpn3
+The following NEW packages will be installed:
+  libjsoncpp1 libprotobuf17 libtinyxml2-6a openvpn3
+  python3-openvpn-connector-setup
+0 upgraded, 5 newly installed, 0 to remove and 16 not upgraded.
+Need to get 2453 kB of archives.
+After this operation, 10.6 MB of additional disk space will be used.
+Do you want to continue? [Y/n] Y
+Get:1 https://swupdate.openvpn.net/community/openvpn3/repos focal/main amd64 ope                                                                              nvpn3 amd64 17~beta2+focal [1542 kB]
+Get:2 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/main amd64                                                                               libprotobuf17 amd64 3.6.1.3-2ubuntu5 [798 kB]
+Get:3 https://swupdate.openvpn.net/community/openvpn3/repos focal/main amd64 pyt                                                                              hon3-openvpn-connector-setup all 2-1+focal [8292 B]
+Get:4 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/universe a                                                                              md64 libtinyxml2-6a amd64 7.0.0+dfsg-1build1 [28.4 kB]
+Get:5 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/main amd64                                                                               libjsoncpp1 amd64 1.7.4-3.1ubuntu2 [75.6 kB]
+Fetched 2453 kB in 1s (1823 kB/s)
+Selecting previously unselected package libprotobuf17:amd64.
+(Reading database ... 70148 files and directories currently installed.)
+Preparing to unpack .../libprotobuf17_3.6.1.3-2ubuntu5_amd64.deb ...
+Unpacking libprotobuf17:amd64 (3.6.1.3-2ubuntu5) ...
+Selecting previously unselected package libtinyxml2-6a:amd64.
+Preparing to unpack .../libtinyxml2-6a_7.0.0+dfsg-1build1_amd64.deb ...
+Unpacking libtinyxml2-6a:amd64 (7.0.0+dfsg-1build1) ...
+Selecting previously unselected package libjsoncpp1:amd64.
+Preparing to unpack .../libjsoncpp1_1.7.4-3.1ubuntu2_amd64.deb ...
+Unpacking libjsoncpp1:amd64 (1.7.4-3.1ubuntu2) ...
+Selecting previously unselected package openvpn3.
+Preparing to unpack .../openvpn3_17~beta2+focal_amd64.deb ...
+Unpacking openvpn3 (17~beta2+focal) ...
+Selecting previously unselected package python3-openvpn-connector-setup.
+Preparing to unpack .../python3-openvpn-connector-setup_2-1+focal_all.deb ...
+Unpacking python3-openvpn-connector-setup (2-1+focal) ...
+Setting up libtinyxml2-6a:amd64 (7.0.0+dfsg-1build1) ...
+Setting up libprotobuf17:amd64 (3.6.1.3-2ubuntu5) ...
+Setting up libjsoncpp1:amd64 (1.7.4-3.1ubuntu2) ...
+Setting up openvpn3 (17~beta2+focal) ...
+openvpn3-autoload.service is a disabled or a static unit, not starting it.
+Setting up python3-openvpn-connector-setup (2-1+focal) ...
+Processing triggers for man-db (2.9.1-1) ...
+Processing triggers for dbus (1.12.16-2ubuntu2.1) ...
+Processing triggers for libc-bin (2.31-0ubuntu9.2) ...
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+iptables-persistent is already the newest version (1.0.14).
+0 upgraded, 0 newly installed, 0 to remove and 16 not upgraded.
+OpenVPN Cloud Connector Setup
+
+This utility is used to configure this host as an OpenVPN Cloud Connector.
+Before this utility can be run, you must have configured a connector in
+the OpenVPN Cloud web portal where an setup token is provided.  This
+token is used by this utility to download the proper VPN configuration
+profile and complete the configuration.
+
+Enter setup token: Y9mQxW/Wn31QCltt8cPKdghpvzBR/IWsnoCj+g/H8Ks=603217613b9292835                                                                              0d388b42dbb04f2d3fff163
+
+Downloading OpenVPN Cloud Connector profile ... Done
+Saving profile to "/etc/openvpn3/autoload/connector.conf" ... Done
+Saving openvpn3-autoload config to "/etc/openvpn3/autoload/connector.autoload" .                                                                              .. Done
+Enabling openvpn3-autoload.service during boot ... Done
+Starting openvpn3-autoload.service ... Done
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ ifconfig
+
+Command 'ifconfig' not found, but can be installed with:
+
+sudo apt install net-tools
+
+ubuntu@balu-vm:~$ ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group defaul                                                                              t qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc pfifo_fast state UP gr                                                                              oup default qlen 1000
+    link/ether 02:00:17:00:fe:0f brd ff:ff:ff:ff:ff:ff
+    altname enp0s3
+    inet 10.0.0.229/24 brd 10.0.0.255 scope global ens3
+       valid_lft forever preferred_lft forever
+    inet6 fe80::17ff:fe00:fe0f/64 scope link
+       valid_lft forever preferred_lft forever
+3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state                                                                               UNKNOWN group default qlen 500
+    link/none
+    inet 100.96.1.18/30 brd 100.96.1.19 scope global tun0
+       valid_lft forever preferred_lft forever
+    inet6 fd:0:0:8101::2/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::79c2:a022:2b8b:e4a2/64 scope link stable-privacy
+       valid_lft forever preferred_lft forever
+ubuntu@balu-vm:~$ route -n
+
+Command 'route' not found, but can be installed with:
+
+sudo apt install net-tools
+
+ubuntu@balu-vm:~$ sudo apt install net-tools
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+The following NEW packages will be installed:
+  net-tools
+0 upgraded, 1 newly installed, 0 to remove and 16 not upgraded.
+Need to get 196 kB of archives.
+After this operation, 864 kB of additional disk space will be used.
+Get:1 http://us-sanjose-1-ad-1.clouds.archive.ubuntu.com/ubuntu focal/main amd64                                                                               net-tools amd64 1.60+git20180626.aebd88e-1ubuntu1 [196 kB]
+Fetched 196 kB in 1s (139 kB/s)
+Selecting previously unselected package net-tools.
+(Reading database ... 70266 files and directories currently installed.)
+Preparing to unpack .../net-tools_1.60+git20180626.aebd88e-1ubuntu1_amd64.deb ..                                                                              .
+Unpacking net-tools (1.60+git20180626.aebd88e-1ubuntu1) ...
+Setting up net-tools (1.60+git20180626.aebd88e-1ubuntu1) ...
+Processing triggers for man-db (2.9.1-1) ...
+ubuntu@balu-vm:~$ route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         10.0.0.1        0.0.0.0         UG    100    0        0 ens3
+10.0.0.0        0.0.0.0         255.255.255.0   U     0      0        0 ens3
+23.82.170.14    10.0.0.1        255.255.255.255 UGH   0      0        0 ens3
+100.80.0.0      100.96.1.17     255.240.0.0     UG    0      0        0 tun0
+100.96.0.0      100.96.1.17     255.224.0.0     UG    0      0        0 tun0
+100.96.1.16     0.0.0.0         255.255.255.252 U     0      0        0 tun0
+169.254.0.0     0.0.0.0         255.255.0.0     U     100    0        0 ens3
+ubuntu@balu-vm:~$ ping 8.8.8.8
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=119 time=2.04 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=119 time=1.99 ms
+64 bytes from 8.8.8.8: icmp_seq=3 ttl=119 time=1.98 ms
+^C
+--- 8.8.8.8 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2002ms
+rtt min/avg/max/mdev = 1.979/2.002/2.041/0.027 ms
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ tracert 8.8.8.8
+
+Command 'tracert' not found, did you mean:
+
+  command 'tracert6' from deb ndisc6 (1.0.4-1ubuntu1)
+  command 'tracer' from deb pvm-dev (3.4.6-2build2)
+
+Try: sudo apt install <deb name>
+
+ubuntu@balu-vm:~$ rraceroute 8.8.8.8
+
+Command 'rraceroute' not found, did you mean:
+
+  command 'traceroute' from deb inetutils-traceroute (2:1.9.4-11ubuntu0.1)
+  command 'traceroute' from deb traceroute (1:2.1.0-2)
+
+Try: sudo apt install <deb name>
+
+ubuntu@balu-vm:~$ traceroute 8.8.8.8
+
+Command 'traceroute' not found, but can be installed with:
+
+sudo apt install inetutils-traceroute  # version 2:1.9.4-11ubuntu0.1, or
+sudo apt install traceroute            # version 1:2.1.0-2
+
+ubuntu@balu-vm:~$ route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         10.0.0.1        0.0.0.0         UG    100    0        0 ens3
+10.0.0.0        0.0.0.0         255.255.255.0   U     0      0        0 ens3
+23.82.170.14    10.0.0.1        255.255.255.255 UGH   0      0        0 ens3
+100.80.0.0      100.96.1.17     255.240.0.0     UG    0      0        0 tun0
+100.96.0.0      100.96.1.17     255.224.0.0     UG    0      0        0 tun0
+100.96.1.16     0.0.0.0         255.255.255.252 U     0      0        0 tun0
+169.254.0.0     0.0.0.0         255.255.0.0     U     100    0        0 ens3
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ grep net.ipv4.ip_forward /etc/sysctl.conf
+net.ipv4.ip_forward=1
+ubuntu@balu-vm:~$ ipa
+
+Command 'ipa' not found, but can be installed with:
+
+sudo apt install freeipa-client
+
+ubuntu@balu-vm:~$ ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 02:00:17:00:fe:0f brd ff:ff:ff:ff:ff:ff
+    altname enp0s3
+    inet 10.0.0.229/24 brd 10.0.0.255 scope global ens3
+       valid_lft forever preferred_lft forever
+    inet6 fe80::17ff:fe00:fe0f/64 scope link
+       valid_lft forever preferred_lft forever
+3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 500
+    link/none
+    inet 100.96.1.18/30 brd 100.96.1.19 scope global tun0
+       valid_lft forever preferred_lft forever
+    inet6 fd:0:0:8101::2/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::79c2:a022:2b8b:e4a2/64 scope link stable-privacy
+       valid_lft forever preferred_lft forever
+ubuntu@balu-vm:~$ tcpdump -i tun0
+tcpdump: tun0: You don't have permission to capture on that device
+(socket: Operation not permitted)
+ubuntu@balu-vm:~$ su
+Password:
+su: Authentication failure
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+04:07:05.904676 IP 100.96.1.17.20331 > 13.107.4.52.http: Flags [S], seq 2871458209, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:05.904713 IP balu-vm > 100.96.1.17: ICMP host 13.107.4.52 unreachable - admin prohibited, length 60
+04:07:05.905465 IP balu-vm.36672 > 100.96.1.17.domain: 48713+ PTR? 52.4.107.13.in-addr.arpa. (42)
+04:07:05.905504 IP6 fd:0:0:8101::1.12465 > 2a01:111:2003::52.http: Flags [S], seq 441824243, win 64800, options [mss 1264                                     ,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:05.905533 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route 2a01:111:2003::52, length                                      80
+04:07:06.008744 IP 100.96.1.17.domain > balu-vm.36672: 48713 NXDomain 0/1/0 (150)
+04:07:06.009340 IP balu-vm.43531 > 100.96.1.17.domain: 36236+ PTR? 17.1.96.100.in-addr.arpa. (42)
+04:07:06.010781 IP 100.96.1.17.domain > balu-vm.43531: 36236 NXDomain* 0/1/0 (96)
+04:07:06.011405 IP balu-vm.60744 > 100.96.1.17.domain: 56878+ PTR? 18.1.96.100.in-addr.arpa. (42)
+04:07:06.013716 IP balu-vm.52070 > 100.96.1.17.domain: 59525+ PTR? 2.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.3.0.0.2.1.1.1.                                     0.1.0.a.2.ip6.arpa. (90)
+04:07:06.276282 IP 100.96.1.17.domain > balu-vm.52070: 59525 NXDomain 0/1/0 (203)
+04:07:06.286821 IP balu-vm.49151 > 100.96.1.17.domain: 46405+ PTR? 2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.1.8.0.0.0.0.0.0.0.                                     0.d.f.0.0.ip6.arpa. (90)
+04:07:06.629425 IP6 fd:0:0:8101::1.12465 > 2a01:111:2003::52.http: Flags [S], seq 441824243, win 64800, options [mss 1264                                     ,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:06.629476 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route 2a01:111:2003::52, length                                      80
+04:07:06.629489 IP 100.96.1.17.20331 > 13.107.4.52.http: Flags [S], seq 2871458209, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:06.629509 IP balu-vm > 100.96.1.17: ICMP host 13.107.4.52 unreachable - admin prohibited, length 60
+04:07:07.185104 IP6 fd:0:0:8101::1.51078 > bi-in-f188.1e100.net.https: Flags [S], seq 1432843217, win 64800, options [mss                                      1264,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:07.185148 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route bi-in-f188.1e100.net, len                                     gth 80
+04:07:07.185711 IP balu-vm.42796 > 100.96.1.17.domain: 19245+ PTR? c.b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.0.c.0.4.0.0.4.0.b.8.                                     f.7.0.6.2.ip6.arpa. (90)
+04:07:07.189663 IP 100.96.1.17 > dns.google: ICMP echo request, id 42073, seq 85, length 40
+04:07:07.189685 IP balu-vm > 100.96.1.17: ICMP host dns.google unreachable - admin prohibited, length 68
+04:07:07.262627 IP 100.96.1.17.domain > balu-vm.42796: 19245 1/0/0 PTR bi-in-f188.1e100.net. (124)
+04:07:07.263392 IP balu-vm.39594 > 100.96.1.17.domain: 23727+ PTR? 8.8.8.8.in-addr.arpa. (38)
+04:07:07.264904 IP 100.96.1.17.domain > balu-vm.39594: 23727 1/0/0 PTR dns.google. (62)
+04:07:07.485841 IP 100.96.1.17.28095 > bc-in-f188.1e100.net.https: Flags [S], seq 2553536779, win 64240, options [mss 128                                     4,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:07.485889 IP balu-vm > 100.96.1.17: ICMP host bc-in-f188.1e100.net unreachable - admin prohibited, length 60
+04:07:07.486236 IP balu-vm.54670 > 100.96.1.17.domain: 58098+ PTR? 188.62.253.172.in-addr.arpa. (45)
+04:07:07.526562 IP 100.96.1.17.domain > balu-vm.54670: 58098 1/0/0 PTR bc-in-f188.1e100.net. (79)
+04:07:07.553521 IP 100.96.1.17.56608 > 52.182.143.210.https: Flags [S], seq 3677093700, win 64240, options [mss 1284,nop,                                     wscale 8,nop,nop,sackOK], length 0
+04:07:07.553568 IP balu-vm > 100.96.1.17: ICMP host 52.182.143.210 unreachable - admin prohibited, length 60
+04:07:07.553912 IP balu-vm.57816 > 100.96.1.17.domain: 60372+ PTR? 210.143.182.52.in-addr.arpa. (45)
+04:07:07.664135 IP 100.96.1.17.domain > balu-vm.57816: 60372 NXDomain 0/1/0 (122)
+04:07:08.009585 IP balu-vm.33172 > 100.96.1.17.domain: 6935+ AAAA? telemetry-ingestion.us-sanjose-1.oci.oraclecloud.com.                                      (70)
+04:07:08.011229 IP 100.96.1.17.domain > balu-vm.33172: 6935 0/1/0 (144)
+04:07:08.188236 IP6 fd:0:0:8101::1.51078 > bi-in-f188.1e100.net.https: Flags [S], seq 1432843217, win 64800, options [mss                                      1264,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:08.188291 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route bi-in-f188.1e100.net, len                                     gth 80
+04:07:08.200745 IP 100.96.1.17 > dns.google: ICMP echo request, id 7475, seq 86, length 40
+04:07:08.200780 IP balu-vm > 100.96.1.17: ICMP host dns.google unreachable - admin prohibited, length 68
+04:07:08.494329 IP 100.96.1.17.28095 > bc-in-f188.1e100.net.https: Flags [S], seq 2553536779, win 64240, options [mss 128                                     4,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:08.494368 IP balu-vm > 100.96.1.17: ICMP host bc-in-f188.1e100.net unreachable - admin prohibited, length 60
+04:07:08.552924 IP 100.96.1.17.56608 > 52.182.143.210.https: Flags [S], seq 3677093700, win 64240, options [mss 1284,nop,                                     wscale 8,nop,nop,sackOK], length 0
+04:07:08.552957 IP balu-vm > 100.96.1.17: ICMP host 52.182.143.210 unreachable - admin prohibited, length 60
+04:07:08.644223 IP6 fd:0:0:8101::1.12465 > 2a01:111:2003::52.http: Flags [S], seq 441824243, win 64800, options [mss 1264                                     ,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:08.644265 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route 2a01:111:2003::52, length                                      80
+04:07:08.644345 IP 100.96.1.17.20331 > 13.107.4.52.http: Flags [S], seq 2871458209, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:09.258652 IP 100.96.1.17 > dns.google: ICMP echo request, id 2475, seq 87, length 40
+04:07:09.258690 IP balu-vm > 100.96.1.17: ICMP host dns.google unreachable - admin prohibited, length 68
+04:07:09.632471 IP 100.96.1.17.20780 > 20.42.73.25.https: Flags [S], seq 147143739, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:09.632822 IP balu-vm.51588 > 100.96.1.17.domain: 1305+ PTR? 25.73.42.20.in-addr.arpa. (42)
+04:07:09.734981 IP 100.96.1.17.domain > balu-vm.51588: 1305 NXDomain 0/1/0 (131)
+04:07:09.879758 IP 100.96.1.17.7932 > 20.42.73.25.https: Flags [S], seq 290904949, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:10.178681 IP 100.96.1.17.34637 > 20.42.73.25.https: Flags [S], seq 716824045, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:10.178720 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:10.207713 IP6 fd:0:0:8101::1.51078 > bi-in-f188.1e100.net.https: Flags [S], seq 1432843217, win 64800, options [mss                                      1264,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:10.207756 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route bi-in-f188.1e100.net, len                                     gth 80
+04:07:10.284642 IP 100.96.1.17 > dns.google: ICMP echo request, id 4832, seq 88, length 40
+04:07:10.375322 IP 100.96.1.17.26259 > 129.146.12.130.https: Flags [S], seq 531565604, win 64240, options [mss 1284,nop,w                                     scale 8,nop,nop,sackOK], length 0
+04:07:10.375677 IP balu-vm.44093 > 100.96.1.17.domain: 15400+ PTR? 130.12.146.129.in-addr.arpa. (45)
+04:07:10.384979 IP 100.96.1.17.30520 > 20.42.73.25.https: Flags [S], seq 2101098472, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:10.498630 IP 100.96.1.17.28095 > bc-in-f188.1e100.net.https: Flags [S], seq 2553536779, win 64240, options [mss 128                                     4,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:10.565700 IP 100.96.1.17.56608 > 52.182.143.210.https: Flags [S], seq 3677093700, win 64240, options [mss 1284,nop,                                     wscale 8,nop,nop,sackOK], length 0
+04:07:10.610904 IP 100.96.1.17.31171 > 129.146.12.130.https: Flags [S], seq 955429029, win 64240, options [mss 1284,nop,w                                     scale 8,nop,nop,sackOK], length 0
+04:07:10.630233 IP 100.96.1.17.6299 > 20.42.73.25.https: Flags [S], seq 635203251, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:10.637531 IP 100.96.1.17.20780 > 20.42.73.25.https: Flags [S], seq 147143739, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:11.139064 IP 100.96.1.17.34637 > 20.42.73.25.https: Flags [S], seq 716824045, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:11.139114 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:11.139193 IP 100.96.1.17.52550 > 20.42.73.25.https: Flags [S], seq 4216617034, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:11.389092 IP 100.96.1.17.8373 > 20.42.73.25.https: Flags [S], seq 1780438151, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:11.389192 IP 100.96.1.17.26259 > 129.146.12.130.https: Flags [S], seq 531565604, win 64240, options [mss 1284,nop,w                                     scale 8,nop,nop,sackOK], length 0
+04:07:11.389226 IP 100.96.1.17.30520 > 20.42.73.25.https: Flags [S], seq 2101098472, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:11.638175 IP 100.96.1.17.31147 > 20.42.73.25.https: Flags [S], seq 1378195064, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:11.647955 IP 100.96.1.17.6299 > 20.42.73.25.https: Flags [S], seq 635203251, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:11.882438 IP 100.96.1.17.3555 > 20.42.73.25.https: Flags [S], seq 1581553856, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:11.896986 IP 100.96.1.17.9559 > 20.42.73.25.https: Flags [S], seq 413516145, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:12.138430 IP 100.96.1.17.35748 > 20.42.73.25.https: Flags [S], seq 3448806688, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:12.138472 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:12.148356 IP 100.96.1.17.52550 > 20.42.73.25.https: Flags [S], seq 4216617034, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:12.384035 IP 100.96.1.17.56126 > 20.42.73.25.https: Flags [S], seq 3216554823, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:12.395233 IP 100.96.1.17.8373 > 20.42.73.25.https: Flags [S], seq 1780438151, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:12.633667 IP 100.96.1.17.30809 > 20.42.73.25.https: Flags [S], seq 241477069, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:12.638193 IP 100.96.1.17.31147 > 20.42.73.25.https: Flags [S], seq 1378195064, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:12.649627 IP 100.96.1.17.20780 > 20.42.73.25.https: Flags [S], seq 147143739, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:12.649700 IP6 fd:0:0:8101::1.12465 > 2a01:111:2003::52.http: Flags [S], seq 441824243, win 64800, options [mss 1264                                     ,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:12.649730 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route 2a01:111:2003::52, length                                      80
+04:07:12.649766 IP 100.96.1.17.20331 > 13.107.4.52.http: Flags [S], seq 2871458209, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:12.881237 IP 100.96.1.17.22739 > 20.42.73.25.https: Flags [S], seq 4208016226, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:12.885800 IP 100.96.1.17.3555 > 20.42.73.25.https: Flags [S], seq 1581553856, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:12.901378 IP 100.96.1.17.7932 > 20.42.73.25.https: Flags [S], seq 290904949, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:13.133162 IP 100.96.1.17.9888 > 20.42.73.25.https: Flags [S], seq 3262280832, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:13.133201 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:13.144222 IP 100.96.1.17.35748 > 20.42.73.25.https: Flags [S], seq 3448806688, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.149024 IP 100.96.1.17.34637 > 20.42.73.25.https: Flags [S], seq 716824045, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:13.386416 IP 100.96.1.17.2489 > 20.42.73.25.https: Flags [S], seq 1015584329, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:13.397298 IP 100.96.1.17.30520 > 20.42.73.25.https: Flags [S], seq 2101098472, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.397408 IP 100.96.1.17.56126 > 20.42.73.25.https: Flags [S], seq 3216554823, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.630696 IP 100.96.1.17.62182 > 20.42.73.25.https: Flags [S], seq 3556334546, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.640667 IP 100.96.1.17.30809 > 20.42.73.25.https: Flags [S], seq 241477069, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:13.656295 IP 100.96.1.17.6299 > 20.42.73.25.https: Flags [S], seq 635203251, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:13.886516 IP 100.96.1.17.30258 > 20.42.73.25.https: Flags [S], seq 4116489038, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.891345 IP 100.96.1.17.22739 > 20.42.73.25.https: Flags [S], seq 4208016226, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:13.903086 IP 100.96.1.17.9559 > 20.42.73.25.https: Flags [S], seq 413516145, win 64240, options [mss 1284,nop,wscal                                     e 8,nop,nop,sackOK], length 0
+04:07:13.903124 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:14.179278 IP 100.96.1.17.28787 > 20.42.73.25.https: Flags [S], seq 3522470746, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.179390 IP 100.96.1.17.9888 > 20.42.73.25.https: Flags [S], seq 3262280832, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:14.179424 IP 100.96.1.17.52550 > 20.42.73.25.https: Flags [S], seq 4216617034, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.215283 IP6 fd:0:0:8101::1.51078 > bi-in-f188.1e100.net.https: Flags [S], seq 1432843217, win 64800, options [mss                                      1264,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:14.215336 IP6 balu-vm > fd:0:0:8101::1: ICMP6, destination unreachable, unreachable route bi-in-f188.1e100.net, len                                     gth 80
+04:07:14.381926 IP 100.96.1.17.38620 > 20.42.73.25.https: Flags [S], seq 2465217804, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.397862 IP 100.96.1.17.2489 > 20.42.73.25.https: Flags [S], seq 1015584329, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:14.402614 IP 100.96.1.17.8373 > 20.42.73.25.https: Flags [S], seq 1780438151, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:14.511848 IP 100.96.1.17.28095 > bc-in-f188.1e100.net.https: Flags [S], seq 2553536779, win 64240, options [mss 128                                     4,nop,wscale 8,nop,nop,sackOK], length 0
+04:07:14.568314 IP 100.96.1.17.56608 > 52.182.143.210.https: Flags [S], seq 3677093700, win 64240, options [mss 1284,nop,                                     wscale 8,nop,nop,sackOK], length 0
+04:07:14.644400 IP 100.96.1.17.31147 > 20.42.73.25.https: Flags [S], seq 1378195064, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.649044 IP 100.96.1.17.62182 > 20.42.73.25.https: Flags [S], seq 3556334546, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.880439 IP 100.96.1.17.30258 > 20.42.73.25.https: Flags [S], seq 4116489038, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:14.896102 IP 100.96.1.17.3555 > 20.42.73.25.https: Flags [S], seq 1581553856, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:15.147834 IP 100.96.1.17.28787 > 20.42.73.25.https: Flags [S], seq 3522470746, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:15.147873 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+04:07:15.147952 IP 100.96.1.17.35748 > 20.42.73.25.https: Flags [S], seq 3448806688, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:15.401672 IP 100.96.1.17.56126 > 20.42.73.25.https: Flags [S], seq 3216554823, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:15.406355 IP 100.96.1.17.38620 > 20.42.73.25.https: Flags [S], seq 2465217804, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:15.648294 IP 100.96.1.17.30809 > 20.42.73.25.https: Flags [S], seq 241477069, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:15.898314 IP 100.96.1.17.22739 > 20.42.73.25.https: Flags [S], seq 4208016226, win 64240, options [mss 1284,nop,wsc                                     ale 8,nop,nop,sackOK], length 0
+04:07:16.211848 IP 100.96.1.17.9888 > 20.42.73.25.https: Flags [S], seq 3262280832, win 64240, options [mss 1284,nop,wsca                                     le 8,nop,nop,sackOK], length 0
+04:07:16.211888 IP balu-vm > 100.96.1.17: ICMP host 20.42.73.25 unreachable - admin prohibited, length 60
+
+
+
+
+^C
+125 packets captured
+132 packets received by filter
+7 packets dropped by kernel
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0 -dst 8.8.8.8
+tcpdump: invalid snaplen t
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0 dst 8.8.8.8
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+04:08:03.368244 IP 100.96.1.17 > dns.google: ICMP echo request, id 6769, seq 89, length 40
+04:08:04.379958 IP 100.96.1.17 > dns.google: ICMP echo request, id 65243, seq 90, length 40
+04:08:09.047858 IP 100.96.1.17 > dns.google: ICMP echo request, id 65243, seq 91, length 40
+04:08:10.077062 IP 100.96.1.17 > dns.google: ICMP echo request, id 57012, seq 92, length 40
+^C
+4 packets captured
+4 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 02:00:17:00:fe:0f brd ff:ff:ff:ff:ff:ff
+    altname enp0s3
+    inet 10.0.0.229/24 brd 10.0.0.255 scope global ens3
+       valid_lft forever preferred_lft forever
+    inet6 fe80::17ff:fe00:fe0f/64 scope link
+       valid_lft forever preferred_lft forever
+3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 500
+    link/none
+    inet 100.96.1.18/30 brd 100.96.1.19 scope global tun0
+       valid_lft forever preferred_lft forever
+    inet6 fd:0:0:8101::2/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::79c2:a022:2b8b:e4a2/64 scope link stable-privacy
+       valid_lft forever preferred_lft forever
+ubuntu@balu-vm:~$ sudo tcpdump -i ens3 dst 8.8.8.8
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on ens3, link-type EN10MB (Ethernet), capture size 262144 bytes
+^C
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0 dst 8.8.8.8
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+04:22:42.061195 IP 100.96.1.17 > dns.google: ICMP echo request, id 23465, seq 111, length 40
+04:22:47.051935 IP 100.96.1.17 > dns.google: ICMP echo request, id 23465, seq 112, length 40
+04:22:48.076172 IP 100.96.1.17 > dns.google: ICMP echo request, id 38778, seq 113, length 40
+04:22:53.056227 IP 100.96.1.17 > dns.google: ICMP echo request, id 38778, seq 114, length 40
+^C
+4 packets captured
+4 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ vi /etc/sysctl.conf
+ubuntu@balu-vm:~$ vi /etc/sysctl.conf
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0 -nnevv dst 8.8.8.8
+tcpdump: listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+04:26:25.673541 ip: (tos 0x0, ttl 126, id 11194, offset 0, flags [none], proto ICMP (1), length 60)
+    100.96.1.17 > 8.8.8.8: ICMP echo request, id 29347, seq 115, length 40
+04:26:26.702516 ip: (tos 0x0, ttl 126, id 11195, offset 0, flags [none], proto ICMP (1), length 60)
+    100.96.1.17 > 8.8.8.8: ICMP echo request, id 54710, seq 116, length 40
+^C
+2 packets captured
+2 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 02:00:17:00:fe:0f brd ff:ff:ff:ff:ff:ff
+    altname enp0s3
+    inet 10.0.0.229/24 brd 10.0.0.255 scope global ens3
+       valid_lft forever preferred_lft forever
+    inet6 fe80::17ff:fe00:fe0f/64 scope link
+       valid_lft forever preferred_lft forever
+3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 500
+    link/none
+    inet 100.96.1.18/30 brd 100.96.1.19 scope global tun0
+       valid_lft forever preferred_lft forever
+    inet6 fd:0:0:8101::2/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::79c2:a022:2b8b:e4a2/64 scope link stable-privacy
+       valid_lft forever preferred_lft forever
+ubuntu@balu-vm:~$ ip route -a
+Command "-a" is unknown, try "ip route help".
+ubuntu@balu-vm:~$ ip route
+default via 10.0.0.1 dev ens3 proto dhcp src 10.0.0.229 metric 100
+10.0.0.0/24 dev ens3 proto kernel scope link src 10.0.0.229
+23.82.170.14 via 10.0.0.1 dev ens3
+100.80.0.0/12 via 100.96.1.17 dev tun0
+100.96.0.0/11 via 100.96.1.17 dev tun0
+100.96.1.16/30 dev tun0 proto kernel scope link src 100.96.1.18
+169.254.0.0/16 dev ens3 proto dhcp scope link src 10.0.0.229 metric 100
+ubuntu@balu-vm:~$ ping 100.96.1.17
+PING 100.96.1.17 (100.96.1.17) 56(84) bytes of data.
+64 bytes from 100.96.1.17: icmp_seq=1 ttl=64 time=1.12 ms
+64 bytes from 100.96.1.17: icmp_seq=2 ttl=64 time=1.13 ms
+64 bytes from 100.96.1.17: icmp_seq=3 ttl=64 time=1.20 ms
+^C
+--- 100.96.1.17 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2002ms
+rtt min/avg/max/mdev = 1.115/1.148/1.200/0.037 ms
+ubuntu@balu-vm:~$ iptables -t prerouting -nvL
+Fatal: can't open lock file /run/xtables.lock: Permission denied
+ubuntu@balu-vm:~$ sudo iptables -t prerouting -nvL
+iptables v1.8.4 (legacy): can't initialize iptables table `prerouting': Table does not exist (do you need to insmod?)
+Perhaps iptables or your kernel needs to be upgraded.
+ubuntu@balu-vm:~$ sudo iptables -t
+iptables v1.8.4 (legacy): option "-t" requires an argument
+Try `iptables -h' or 'iptables --help' for more information.
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+16027   26M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  253 23186 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   38  2152 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3306  172K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 10416 packets, 5482K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+  774 58442 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:isc                                     si-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact                                      of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:isc                                     si-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact                                      of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:isc                                     si-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact                                      of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:isc                                     si-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact                                      of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-P                                     rovided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this                                      rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle                                     -Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing th                                     is rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle                                     -Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing th                                     is rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:htt                                     p /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modif                                     ying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-P                                     rovided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this                                      rule */
+  663 47831 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-P                                     rovided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this                                      rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle                                     -Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing th                                     is rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-P                                     rovided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this                                      rule */
+    8   608 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Pr                                     ovided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this                                      rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided I                                     mages section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */                                      reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided I                                     mages section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */                                      reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+16095   26M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  269 24506 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   38  2152 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3306  172K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 10504 packets, 5497K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+  774 58442 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  663 47831 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    8   608 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+16296   26M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  291 26390 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   38  2152 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3306  172K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 10698 packets, 5664K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+  790 59574 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  679 48963 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    8   608 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+16368   26M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  307 27710 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   38  2152 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3306  172K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 10793 packets, 5681K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+  791 59626 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  680 49015 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    8   608 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+16691   26M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  325 29218 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   38  2152 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 3520  183K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 11004 packets, 5757K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+  794 59782 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  683 49171 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    8   608 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+ubuntu@balu-vm:~$ cat /proc/sys/net/ipv4/ip_forward
+1
+ubuntu@balu-vm:~$ iptables -I FORWARD 1 -j ACCEPT
+Fatal: can't open lock file /run/xtables.lock: Permission denied
+ubuntu@balu-vm:~$ sudo iptables -I FORWARD 1 -j ACCEPT
+ubuntu@balu-vm:~$ sudo iptables -L -v
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+19850   27M ACCEPT     all  --  any    any     anywhere             anywhere             state RELATED,ESTABLISHED
+    0     0 ACCEPT     icmp --  any    any     anywhere             anywhere
+  457 41322 ACCEPT     all  --  lo     any     anywhere             anywhere
+    0     0 ACCEPT     udp  --  any    any     anywhere             anywhere             udp spt:ntp
+   44  2476 ACCEPT     tcp  --  any    any     anywhere             anywhere             state NEW tcp dpt:ssh
+    0     0 REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     all  --  any    any     anywhere             anywhere
+ 3717  194K REJECT     all  --  any    any     anywhere             anywhere             reject-with icmp-host-prohibited
+
+Chain OUTPUT (policy ACCEPT 9 packets, 1384 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+ 1178 86608 InstanceServices  all  --  any    any     anywhere             169.254.0.0/16
+
+Chain InstanceServices (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.2.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.4.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.5.0/24       owner UID match root tcp dpt:iscsi-target /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.2          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+  103 10003 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:domain /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.3          owner UID match root tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     tcp  --  any    any     anywhere             169.254.0.4          tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+ 1065 75845 ACCEPT     tcp  --  any    any     anywhere             169.254.169.254      tcp dpt:http /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:bootps /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:tftp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+   10   760 ACCEPT     udp  --  any    any     anywhere             169.254.169.254      udp dpt:ntp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */
+    0     0 REJECT     tcp  --  any    any     anywhere             169.254.0.0/16       tcp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with tcp-reset
+    0     0 REJECT     udp  --  any    any     anywhere             169.254.0.0/16       udp /* See the Oracle-Provided Images section in the Oracle Cloud Infrastructure documentation for security impact of modifying or removing this rule */ reject-with icmp-port-unreachable
+ubuntu@balu-vm:~$ ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 02:00:17:00:fe:0f brd ff:ff:ff:ff:ff:ff
+    altname enp0s3
+    inet 10.0.0.229/24 brd 10.0.0.255 scope global ens3
+       valid_lft forever preferred_lft forever
+    inet6 fe80::17ff:fe00:fe0f/64 scope link
+       valid_lft forever preferred_lft forever
+3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 500
+    link/none
+    inet 100.96.1.18/30 brd 100.96.1.19 scope global tun0
+       valid_lft forever preferred_lft forever
+    inet6 fd:0:0:8101::2/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::79c2:a022:2b8b:e4a2/64 scope link stable-privacy
+       valid_lft forever preferred_lft forever
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$ sudo tcpdump -i ens3 dst 8.8.8.8
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on ens3, link-type EN10MB (Ethernet), capture size 262144 bytes
+05:46:10.919594 IP balu-vm > dns.google: ICMP echo request, id 26417, seq 186, length 40
+05:46:11.940575 IP balu-vm > dns.google: ICMP echo request, id 26417, seq 187, length 40
+05:46:12.971413 IP balu-vm > dns.google: ICMP echo request, id 26417, seq 188, length 40
+^C
+3 packets captured
+3 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ sudo tcpdump -i -nnevvv ens3 dst 8.8.8.8
+tcpdump: -nnevvv: No such device exists
+(SIOCGIFHWADDR: No such device)
+ubuntu@balu-vm:~$ sudo tcpdump -i ens3 -nnevvv dst 8.8.8.8
+tcpdump: listening on ens3, link-type EN10MB (Ethernet), capture size 262144 bytes
+05:46:51.851903 02:00:17:00:fe:0f > 00:00:17:1a:a6:d6, ethertype IPv4 (0x0800), length 74: (tos 0x0, ttl 125, id 10900, offset 0, flags [none], proto ICMP (1), length 60)
+    10.0.0.229 > 8.8.8.8: ICMP echo request, id 13684, seq 189, length 40
+05:46:52.876851 02:00:17:00:fe:0f > 00:00:17:1a:a6:d6, ethertype IPv4 (0x0800), length 74: (tos 0x0, ttl 125, id 10901, offset 0, flags [none], proto ICMP (1), length 60)
+    10.0.0.229 > 8.8.8.8: ICMP echo request, id 13684, seq 190, length 40
+05:46:53.892658 02:00:17:00:fe:0f > 00:00:17:1a:a6:d6, ethertype IPv4 (0x0800), length 74: (tos 0x0, ttl 125, id 10902, offset 0, flags [none], proto ICMP (1), length 60)
+    10.0.0.229 > 8.8.8.8: ICMP echo request, id 13684, seq 191, length 40
+^C
+3 packets captured
+3 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$ sudo tcpdump -i tun0 -nnevv dst 8.8.8.8
+tcpdump: listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+05:47:32.358150 ip: (tos 0x0, ttl 126, id 10903, offset 0, flags [none], proto ICMP (1), length 60)
+    100.96.1.17 > 8.8.8.8: ICMP echo request, id 29020, seq 192, length 40
+05:47:33.388163 ip: (tos 0x0, ttl 126, id 10904, offset 0, flags [none], proto ICMP (1), length 60)
+    100.96.1.17 > 8.8.8.8: ICMP echo request, id 29020, seq 193, length 40
+^C
+2 packets captured
+2 packets received by filter
+0 packets dropped by kernel
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+ubuntu@balu-vm:~$
+
+  
+  
+  
+      
