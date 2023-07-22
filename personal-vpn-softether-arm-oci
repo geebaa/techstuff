@@ -1,0 +1,36 @@
+   64  wget https://www.softether-download.com/files/softether/v4.42-9798-rtm-2023.06.30-tree/Linux/SoftEther_VPN_Server/64bit_-_ARM_64bit/softether-vpnserver-v4.42-9798-rtm-2023.06.30-linux-arm64-64bit.tar.gz
+   66  tar xvf softether-vpnserver-v4.42-9798-rtm-2023.06.30-linux-arm64-64bit.tar.gz
+   67  cd vpnserver/
+   70  sudo apt-get update
+   71  sudo apt install gcc binutils gzip libreadline-dev libssl-dev libncurses5-dev libncursesw5-dev libpthread-stubs0-dev
+   72  make
+   75  sudo apt-get install build-essential gnupg2 gcc make
+   76  make
+   77  cd ..
+   78  sudo mv vpnserver /opt/softether
+   79  sudo /opt/softether/vpnserver start
+   82  sudo /opt/softether/vpnserver stop
+   83  sudo nano /etc/systemd/system/softether-vpnserver.service
+   84  cat /etc/systemd/system/softether-vpnserver.service
+   85  sudo systemctl start softether-vpnserver
+   86  sudo systemctl enable softether-vpnserver
+   87  systemctl status softether-vpnserver
+   88  sudo journalctl -eu softether-vpnserver
+   89  sudo  ss -lnptu | grep vpnserver
+   91  /opt/softether/vpncmd
+   92  sudo apt install bind9
+   93  systemctl status named
+   94  /opt/softether/vpncmd
+  114  sudo -s
+  115  sudo systemctl status softether-vpnserver
+  119  sudo netstat -anp | grep vpnserver
+  120  /opt/softether/vpncmd
+  121  ls ~/openvpn-config.zip
+  123  sudo apt-get install unzip
+  124  unzip /home/ubuntu/openvpn-config.zip
+  127  cat ampere-server1_openvpn_remote_access_l3.ovpn
+  136  ifconfig enp0s3
+  153  sudo iptables -I INPUT 6 -j ACCEPT
+  158  /opt/softether/vpncmd
+  159  sudo systemctl stop softether-vpnserver
+  160  sudo systemctl start softether-vpnserver
