@@ -2,8 +2,14 @@ On oracle free tier spin up a VM either ARM or x86
 Follow the tutorial here https://operavps.com/docs/install-softether-vpn-on-ubuntu/
 On ARM - There is a IPtables INPUT rule that needs to be removed or Another ACCEPT rule to be added before that for the VPN client to connect. 
 On performamce , Running in openvpn clone mode gives better thruput than L2TP/IPSEC
-Enable UDP 500,4500,1194
-Enable TCP 443
+
+to use openvpn client on mobile 
+===============================
+Enable UDP dest port 1194
+
+to use native l2tp/ipsec psk
+=============================
+???
 
 This will make the default android/iphone VPN client to work 
 This will also help with openvpn client  to work. For this one has to download the openvpn profile from the installed server and upload it .
