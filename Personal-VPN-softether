@@ -9,7 +9,12 @@ Enable UDP dest port 1194
 
 to use native l2tp/ipsec psk
 =============================
-???
+sudo iptables -I INPUT 7  -p udp --dport 500 -j ACCEPT
+sudo iptables -I INPUT 8  -p udp --dport 4500 -j ACCEPT
+sudo iptables -I INPUT 9  -p 50 -j ACCEPT
+sudo iptables -I INPUT 10 -p 51 -j ACCEPT
+sudo iptables -I INPUT 11 -p udp -m policy --dir in --pol ipsec -m udp --dport 1701 -j ACCEPT
+
 
 This will make the default android/iphone VPN client to work 
 This will also help with openvpn client  to work. For this one has to download the openvpn profile from the installed server and upload it .
