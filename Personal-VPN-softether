@@ -5,7 +5,9 @@ On performamce , Running in openvpn clone mode gives better thruput than L2TP/IP
 
 to use openvpn client on mobile 
 ===============================
-Enable UDP dest port 1194
+sudo iptables -I INPUT 6  -p tcp --dport 1194 -j ACCEPT
+sudo iptables -I INPUT 12  -p tcp --dport 443 -j ACCEPT
+sudo iptables -I INPUT 13  -p udp --dport 443 -j ACCEPT
 
 to use native l2tp/ipsec psk
 =============================
