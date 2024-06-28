@@ -1,0 +1,43 @@
+Had a old android device based on Qualcomm® Snapdragon™ 410 1.2 GHz Quad-Core MSM8916
+its a system based on ARM7 (32 bit)
+
+Steps to Convert it to a pihile on the network
+
+1) Unlock bootloader and install TWRP 
+2) Root the phone and install lineage OS  (only unofficaial available) .
+3) Install linuxdeploy android apk
+4) Download pi-hole for android from https://github.com/DesktopECHO/Pi-hole-for-Android/releases (release p4a16.tgz or p4a17.tgz) 
+
+Copy pi-hole into external SD (to save ROM space)
+
+Follow procedure here
+https://xdaforums.com/t/dev-root-pi-hole-for-android-deploy-pi-hole-dns-server-to-any-android-4-x-device.4332889/
+
+
+
+=====
+· Open Linux Deploy
+
+· Open Properties Menu (Bottom Right)​
+· Distribution: rootfs.tar​
+· Source Path - This varies depending on the device, ie: ${EXTERNAL_STORAGE}/Download/p4a16.tgz​
+· Set password for user "android"​
+· Init -> Enable​
+
+· Go back to main window, click Options Menu (Three dots, top right of screen) and click "Install"
+
+· Wait a few minutes for the disk image to install.​
+· Allow the install to complete before proceeding to next steps.​
+· When install is complete, the Linux Deploy console window will show the following:​
+
+Code:
+[HH:mm:ss] >>> :: Configuring core/launchroot ...
+[HH:mm:ss] >>> deploy
+
+· Open Hamburger Menu (Top Left) and touch "Settings"
+
+· Place check mark on Lock Wi-Fi​
+· Place check mark on Autostart​
+
+Touch the [ -> START ] button and confirm when prompted.
+====
