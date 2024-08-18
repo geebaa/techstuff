@@ -41,3 +41,13 @@ Code:
 
 Touch the [ -> START ] button and confirm when prompted.
 ====
+
+
+Possible failues 
+================
+1) When in installation , >>> deploy could fail in "Making file system (ext4) " .. Likely you can reboot and open linux deploy again and it would succeed .
+Else make sure the # access shows up on the top... The application needs to have root access 
+
+2) Importing from tar.gz failed ... Again try rebooting ...
+
+
