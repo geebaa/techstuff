@@ -50,4 +50,13 @@ Else make sure the # access shows up on the top... The application needs to have
 
 2) Importing from tar.gz failed ... Again try rebooting ...
 
+==============
+Additional hints 
 
+Adding blacklist from the pihole ui 
+refer https://github.com/kboghdady/youTube_ads_4_pi-hole
+blacklists are added from the menu item Adlists
+
+adding whitelist from pihole ui
+refer https://github.com/anudeepND/whitelist/tree/master
+Whitelist is added by the  menu item "domains" in the UI
